@@ -1,0 +1,9 @@
+total_trip_update: 36551
+trip descriptor present: 36551
+trip ID present: 36551
+missing trip descriptor: 0
+missing trip ID: 0
+missing entity ID: 0
+missing both entity ID and trip ID: 0
+duplicated entity ids:134
+duplicated trip ids :134
