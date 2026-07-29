@@ -1,0 +1,4 @@
+requests
+gtfs-realtime-bindings
+google
+confluent-kafka
