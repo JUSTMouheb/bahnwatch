@@ -1,52 +1,183 @@
-from google.transit import gtfs_realtime_pb2
+from datetime import datetime, timezone
+
 import requests
-from datetime import datetime
-import time
+from google.protobuf.message import DecodeError
+from google.transit import gtfs_realtime_pb2
 
-feed = gtfs_realtime_pb2.FeedMessage()
-response = requests.get("https://realtime.gtfs.de/realtime-free.pb")
-feed.ParseFromString(response.content)
 
-len_trip_update = 0
-len_trip_descriptor = 0
-len_trip_id = 0
-missing_entity_id = 0
-both = 0
-set_entity = set()
-set_trip= set()
-duplicated_entity_id = 0
-duplicated_trip_id = 0
-for entity in feed.entity:
+FEED_URL = "https://realtime.gtfs.de/realtime-free.pb"
+REQUEST_TIMEOUT_SECONDS = 10
+
+
+def download_feed():
+    try:
+        response = requests.get(
+            FEED_URL,
+            timeout=REQUEST_TIMEOUT_SECONDS,
+        )
+        response.raise_for_status()
+
+    except requests.exceptions.Timeout:
+        print("Request timed out")
+        return None
+
+    except requests.exceptions.ConnectionError:
+        print("Connection error")
+        return None
+
+    except requests.exceptions.HTTPError as error:
+        print("HTTP error:", error)
+        return None
+
+    if not response.content:
+        print("Empty response")
+        return None
+
+    feed = gtfs_realtime_pb2.FeedMessage()
+
+    try:
+        feed.ParseFromString(response.content)
+    except DecodeError as error:
+        print("Protobuf decoding failed:", error)
+        return None
+
+    return feed
+
+
+def get_entity_type(entity):
     if entity.HasField("trip_update"):
-        len_trip_update += 1
+        return "trip_update"
 
-        if entity.trip_update.HasField("trip"):
-            len_trip_descriptor += 1
+    if entity.HasField("vehicle"):
+        return "vehicle"
 
-        if entity.trip_update.HasField("trip") and entity.trip_update.trip.HasField("trip_id"):
-            len_trip_id += 1
-            id_trip = entity.trip_update.trip.trip_id
-            if id_trip in set_trip:
-                duplicated_trip_id +=1 
-            else: set_trip.add(entity.trip_update.trip.trip_id)
-        if not entity.HasField("id"):
-            missing_entity_id += 1
-        else :
-            if entity.id in set_entity :
-                duplicated_entity_id +=1
-            else: set_entity.add(entity.id)
-        if not entity.HasField("id") and not (entity.trip_update.HasField("trip") and entity.trip_update.trip.HasField("trip_id")):
-            both += 1
+    if entity.HasField("alert"):
+        return "alert"
 
-missing_trip_descriptor = len_trip_update - len_trip_descriptor
-missing_trip_id = len_trip_update - len_trip_id
+    return "unknown"
 
-print("total_trip_update: " + str(len_trip_update))
-print("trip descriptor present: " + str(len_trip_descriptor))
-print("trip ID present: " + str(len_trip_id))
-print("missing trip descriptor: " + str(missing_trip_descriptor))
-print("missing trip ID: " + str(missing_trip_id))
-print("missing entity ID: " + str(missing_entity_id))
-print("missing both entity ID and trip ID: " + str(both))
-print("duplicated entity ids:" + str(duplicated_entity_id))
-print("duplicated trip ids :" + str(duplicated_trip_id))
+
+def print_stop_time_event(name, event):
+    print(f"{name} information:")
+
+    if event.HasField("delay"):
+        print("  Delay:", event.delay)
+    else:
+        print("  Delay: not provided")
+
+    if event.HasField("time"):
+        readable_time = datetime.fromtimestamp(
+            event.time,
+            tz=timezone.utc,
+        )
+
+        print("  Timestamp:", event.time)
+        print("  UTC time:", readable_time)
+    else:
+        print("  Time: not provided")
+
+    if event.HasField("uncertainty"):
+        print("  Uncertainty:", event.uncertainty)
+    else:
+        print("  Uncertainty: not provided")
+
+
+def inspect_first_entity(feed):
+    print("Feed parsed successfully")
+    print("GTFS-Realtime version:", feed.header.gtfs_realtime_version)
+
+    if feed.header.HasField("timestamp"):
+        feed_time = datetime.fromtimestamp(
+            feed.header.timestamp,
+            tz=timezone.utc,
+        )
+
+        print("Feed timestamp:", feed.header.timestamp)
+        print("Feed time in UTC:", feed_time)
+    else:
+        print("Feed timestamp: not provided")
+
+    print("Number of entities:", len(feed.entity))
+
+    if not feed.entity:
+        print("The feed contains no entities")
+        return
+
+    entity = feed.entity[0]
+    serialized_entity = entity.SerializeToString()
+    entity_type = get_entity_type(entity)
+    print(type(serialized_entity))
+    print("\nFirst entity")
+    print("Entity ID:", entity.id)
+    print("Entity type:", entity_type)
+
+    if entity_type != "trip_update":
+        print("The first entity is not a trip update")
+        return
+
+    trip_update = entity.trip_update
+    trip = trip_update.trip
+
+    print("Trip ID:", trip.trip_id)
+
+    if trip.HasField("start_date"):
+        print("Start date:", trip.start_date)
+    else:
+        print("Start date: not provided")
+
+    if trip_update.HasField("timestamp"):
+        print("Trip-update timestamp:", trip_update.timestamp)
+    else:
+        print("Trip-update timestamp: not provided")
+
+    print(
+        "Number of stop-time updates:",
+        len(trip_update.stop_time_update),
+    )
+
+    if not trip_update.stop_time_update:
+        print("This trip contains no stop-time updates")
+        return
+
+    first_stop_update = trip_update.stop_time_update[0]
+
+    print("\nFirst stop-time update")
+
+    if first_stop_update.HasField("stop_id"):
+        print("Stop ID:", first_stop_update.stop_id)
+    else:
+        print("Stop ID: not provided")
+
+    if first_stop_update.HasField("stop_sequence"):
+        print("Stop sequence:", first_stop_update.stop_sequence)
+    else:
+        print("Stop sequence: not provided")
+
+    if first_stop_update.HasField("arrival"):
+        print_stop_time_event(
+            "Arrival",
+            first_stop_update.arrival,
+        )
+    else:
+        print("Arrival information: not provided")
+
+    if first_stop_update.HasField("departure"):
+        print_stop_time_event(
+            "Departure",
+            first_stop_update.departure,
+        )
+    else:
+        print("Departure information: not provided")
+
+
+def main():
+    feed = download_feed()
+
+    if feed is None:
+        return
+
+    inspect_first_entity(feed)
+
+
+if __name__ == "__main__":
+    main()
